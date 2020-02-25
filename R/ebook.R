@@ -29,7 +29,7 @@ epub_book = function(
   number_sections = TRUE, toc = FALSE, toc_depth = 3, stylesheet = NULL,
   cover_image = NULL, metadata = NULL, chapter_level = 1,
   epub_version = c('epub3', 'epub'), md_extensions = NULL, pandoc_args = NULL,
-  template = 'default'
+  template = 'default', number_by = list()
 ) {
   epub_version = match.arg(epub_version)
   args = c(
@@ -53,7 +53,7 @@ epub_book = function(
     knitr = rmarkdown::knitr_options_html(fig_width, fig_height, NULL, FALSE, dev),
     pandoc = rmarkdown::pandoc_options(epub_version, from, args, ext = '.epub'),
     pre_processor = function(metadata, input_file, runtime, knit_meta, files_dir, output_dir) {
-      process_markdown(input_file, from, args, !number_sections)
+      process_markdown(input_file, from, args, !number_sections, number_by)
       NULL
     },
     post_processor = function(metadata, input, output, clean, verbose) {
@@ -73,7 +73,7 @@ move_output = function(output) {
   output2
 }
 
-process_markdown = function(input_file, from, pandoc_args, global, to_md = output_md()) {
+process_markdown = function(input_file, from, pandoc_args, global, number_by, to_md = output_md()) {
   intermediate_html = with_ext(input_file, 'tmp.html')
   on.exit(file.remove(intermediate_html), add = TRUE)
   rmarkdown::pandoc_convert(
@@ -82,7 +82,7 @@ process_markdown = function(input_file, from, pandoc_args, global, to_md = outpu
   )
   x = read_utf8(intermediate_html)
   x = clean_html_tags(x)
-  figs = parse_fig_labels(x, global)
+  figs = parse_fig_labels(x, global, number_by)
   # resolve cross-references and update the Markdown input file
   content = read_utf8(input_file)
   i = xfun::prose_index(content)

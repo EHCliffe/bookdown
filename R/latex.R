@@ -34,7 +34,7 @@
 pdf_book = function(
   toc = TRUE, number_sections = TRUE, fig_caption = TRUE, pandoc_args = NULL, ...,
   base_format = rmarkdown::pdf_document, toc_unnumbered = TRUE,
-  toc_appendix = FALSE, toc_bib = FALSE, quote_footer = NULL, highlight_bw = FALSE
+  toc_appendix = FALSE, toc_bib = FALSE, quote_footer = NULL, highlight_bw = FALSE, number_by = list()
 ) {
   config = get_base_format(base_format, list(
     toc = toc, number_sections = number_sections, fig_caption = fig_caption,
@@ -51,7 +51,7 @@ pdf_book = function(
     x = restore_appendix_latex(x, toc_appendix)
     if (!toc_unnumbered) x = remove_toc_items(x)
     if (toc_bib) x = add_toc_bib(x)
-    x = restore_block2(x, !number_sections)
+    x = restore_block2(x, !number_sections, number_by)
     if (!is.null(quote_footer)) {
       if (length(quote_footer) != 2 || !is.character(quote_footer)) warning(
         "The 'quote_footer' argument should be a character vector of length 2"
@@ -208,27 +208,58 @@ add_toc_bib = function(x) {
   x
 }
 
-restore_block2 = function(x, global = FALSE) {
+restore_block2 = function(x, global = FALSE, number_by) {
+  #Recall: number_by at this point is from the user and defines counter shares, it is prepended so that the entry 'overrides' the default
+  number_by = c(number_by,list('thm'='thm','lem'='lem','cor'='cor','prp'='prp','cnj'='cnj','def' = 'def','exm'='exm','exr'='exr'))
   i = grep('^\\\\begin\\{document\\}', x)[1]
   if (is.na(i)) return(x)
   if (length(grep('\\\\(Begin|End)KnitrBlock', tail(x, -i))))
     x = append(x, '\\let\\BeginKnitrBlock\\begin \\let\\EndKnitrBlock\\end', i - 1)
   if (length(grep(sprintf('^\\\\BeginKnitrBlock\\{(%s)\\}', paste(all_math_env, collapse = '|')), x)) &&
       length(grep('^\\s*\\\\newtheorem\\{theorem\\}', head(x, i))) == 0) {
-    theorem_defs = sprintf(
-      '%s\\newtheorem{%s}{%s}%s', theorem_style(names(theorem_abbr)), names(theorem_abbr),
-      str_trim(vapply(theorem_abbr, label_prefix, character(1), USE.NAMES = FALSE)),
-      if (global) '' else {
-        if (length(grep('^\\\\chapter[*]?', x))) '[chapter]' else '[section]'
-      }
-    )
-    # the proof environment has already been defined by amsthm
-    proof_envs = setdiff(names(label_names_math2), 'proof')
-    proof_defs = sprintf(
-      '%s\\newtheorem*{%s}{%s}', theorem_style(proof_envs), proof_envs,
-      gsub('^\\s+|[.]\\s*$', '', vapply(proof_envs, label_prefix, character(1), label_names_math2))
-    )
-    x = append(x, c('\\usepackage{amsthm}', theorem_defs, proof_defs), i - 1)
+      #This array aligns to theorem_abbr but has those sharing a counter replaced by the env they share the counter with
+      #You can't use aligned_abbr = theorem_abbr[match(number_by[match(theorem_abbr,number_by)],theorem_abbr)] when there are matches in the counter shares
+      aligned_abbr = theorem_abbr[match(unlist(number_by[match(unlist(theorem_abbr,use.names = FALSE),names(number_by))],use.names = FALSE),theorem_abbr)]
+      #These are the locations of the envs which share a counter
+      duplicated_abbrLoc = which(duplicated(names(aligned_abbr)))
+      #These are the locations of the envs which have their counter being shared
+      counters_abbrLoc = unique(match(names(aligned_abbr[duplicated_abbrLoc]),names(aligned_abbr)))
+      #These are the locations of all the envs which share counters and those which they share
+      allcounted_abbrLoc = c(counters_abbrLoc,duplicated_abbrLoc)
+      #These are the locations of all the envs that don't share a counter
+      noncounters_abbrLoc = match(names(aligned_abbr[-allcounted_abbrLoc]),names(aligned_abbr))
+
+      #The envs which are going to share their counter
+      theorem_counters_defs = sprintf(
+        '%s\\newtheorem{%s}{%s}%s', theorem_style(names(aligned_abbr[counters_abbrLoc])), names(aligned_abbr[counters_abbrLoc]),
+      	str_trim(vapply(aligned_abbr[counters_abbrLoc], label_prefix, character(1), USE.NAMES = FALSE)),
+      	if (global) '' else {
+           if (length(grep('^\\\\chapter[*]?', x))) '[chapter]' else '[section]'
+      	}
+      )
+
+      #The envs which share a counter, these pick up their names from the original theorem_abbr using the aligned locations
+      theorem_counted_defs = sprintf(
+        '%s\\newtheorem{%s}[%s]{%s}', theorem_style(names(aligned_abbr[duplicated_abbrLoc])), names(theorem_abbr[duplicated_abbrLoc]), names(aligned_abbr[duplicated_abbrLoc]),
+      	str_trim(vapply(theorem_abbr[duplicated_abbrLoc], label_prefix, character(1), USE.NAMES = FALSE))
+      )
+
+      #The envs which use their own counter and do not share it
+      theorem_rest_defs = sprintf(
+        '%s\\newtheorem{%s}{%s}%s', theorem_style(names(aligned_abbr[noncounters_abbrLoc])), names(aligned_abbr[noncounters_abbrLoc]),
+      	str_trim(vapply(aligned_abbr[noncounters_abbrLoc], label_prefix, character(1), USE.NAMES = FALSE)),
+	if (global) '' else {
+	   if (length(grep('^\\\\chapter[*]?', x))) '[chapter]' else '[section]'
+	}
+      )
+
+      # the proof environment has already been defined by amsthm
+      proof_envs = setdiff(names(label_names_math2), 'proof')
+      proof_defs = sprintf(
+        '%s\\newtheorem*{%s}{%s}', theorem_style(proof_envs), proof_envs,
+      	gsub('^\\s+|[.]\\s*$', '', vapply(proof_envs, label_prefix, character(1), label_names_math2))
+    	)
+    	x = append(x, c('\\usepackage{amsthm}', theorem_counters_defs, theorem_counted_defs, theorem_rest_defs, proof_defs), i - 1)
   }
   # remove the empty lines around the block2 environments
   i3 = if (length(i1 <- grep('^\\\\BeginKnitrBlock\\{', x))) (i1 + 1)[x[i1 + 1] == '']
@@ -244,11 +275,14 @@ restore_block2 = function(x, global = FALSE) {
   x
 }
 
+#We need a plain theorem style to be defined so that we can reset when outputting shared counter setups
+style_plain = c('theorem', 'lemma', 'corollary', 'proposition', 'conjecture')
 style_definition = c('definition', 'example', 'exercise')
 style_remark = c('remark')
 # which styles of theorem environments to use
 theorem_style = function(env) {
   styles = character(length(env))
+  styles[env %in% style_plain] = '\\theoremstyle{plain}\n'
   styles[env %in% style_definition] = '\\theoremstyle{definition}\n'
   styles[env %in% style_remark] = '\\theoremstyle{remark}\n'
   styles

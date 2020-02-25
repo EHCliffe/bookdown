@@ -52,7 +52,7 @@ html_chapters = function(
   toc = TRUE, number_sections = TRUE, fig_caption = TRUE, lib_dir = 'libs',
   template = bookdown_file('templates/default.html'), pandoc_args = NULL, ...,
   base_format = rmarkdown::html_document, split_bib = TRUE, page_builder = build_chapter,
-  split_by = c('section+number', 'section', 'chapter+number', 'chapter', 'rmd', 'none')
+  split_by = c('section+number', 'section', 'chapter+number', 'chapter', 'rmd', 'none'), number_by = list()
 ) {
   config = get_base_format(base_format, list(
     toc = toc, number_sections = number_sections, fig_caption = fig_caption,
@@ -64,7 +64,7 @@ html_chapters = function(
   config$post_processor = function(metadata, input, output, clean, verbose) {
     if (is.function(post)) output = post(metadata, input, output, clean, verbose)
     move_files_html(output, lib_dir)
-    output2 = split_chapters(output, page_builder, number_sections, split_by, split_bib)
+    output2 = split_chapters(output, page_builder, number_sections, split_by, split_bib, number_by)
     if (file.exists(output) && !same_path(output, output2)) file.remove(output)
     move_files_html(output2, lib_dir)
     output2
@@ -112,6 +112,9 @@ tufte_html_book = function(...) {
 #'   (the i-th figure/table); if \code{FALSE}, figures/tables will be numbered
 #'   sequentially in the document from 1, 2, ..., and you cannot cross-reference
 #'   section headers in this case.
+#' @param theorems Whether the theorem types should be numbered sequentially
+#'   by type (original bookdown) or sequentially by style or sequentially
+#'   section regardless of type or style
 #' @inheritParams pdf_book
 #' @return An R Markdown output format object to be passed to
 #'   \code{rmarkdown::\link{render}()}.
@@ -123,7 +126,7 @@ tufte_html_book = function(...) {
 #' @references \url{https://bookdown.org/yihui/bookdown/}
 #' @export
 html_document2 = function(
-  ..., number_sections = TRUE, pandoc_args = NULL, base_format = rmarkdown::html_document
+  ..., number_sections = TRUE, pandoc_args = NULL, base_format = rmarkdown::html_document, number_by=list()
 ) {
   config = get_base_format(base_format, list(
     ..., number_sections = number_sections, pandoc_args = pandoc_args2(pandoc_args)
@@ -135,7 +138,7 @@ html_document2 = function(
     x = clean_html_tags(x)
     x = restore_appendix_html(x, remove = FALSE)
     x = restore_part_html(x, remove = FALSE)
-    x = resolve_refs_html(x, global = !number_sections)
+    x = resolve_refs_html(x, global = !number_sections, number_by)
     write_utf8(x, output)
     output
   }
@@ -239,7 +242,7 @@ build_chapter = function(
   ), collapse = '\n')
 }
 
-split_chapters = function(output, build = build_chapter, number_sections, split_by, split_bib, ...) {
+split_chapters = function(output, build = build_chapter, number_sections, split_by, split_bib, number_by, ...) {
 
   use_rmd_names = split_by == 'rmd'
   split_level = switch(
@@ -311,7 +314,7 @@ split_chapters = function(output, build = build_chapter, number_sections, split_
 
   # no (or not enough) tokens found in the template
   if (any(c(i1, i2, i3, i4, i5, i6) == 0)) {
-    x = resolve_refs_html(x, !number_sections)
+    x = resolve_refs_html(x, !number_sections, number_by)
     x = add_chapter_prefix(x)
     write_utf8(x, output)
     return(output)
@@ -333,7 +336,7 @@ split_chapters = function(output, build = build_chapter, number_sections, split_
     ' first-level heading(s). Did you forget first-level headings in certain Rmd files?'
   )
 
-  html_body = resolve_refs_html(html_body, !number_sections)
+  html_body = resolve_refs_html(html_body, !number_sections, number_by)
 
   # do not split the HTML file
   if (split_level == 0) {
@@ -525,10 +528,10 @@ source_link_setting = function(config, type) {
 #' @keywords internal
 #' @examples library(bookdown)
 #' resolve_refs_html(c('<caption>(#tab:foo) A nice table.</caption>', '<p>See Table @ref(tab:foo).</p>'), TRUE)
-resolve_refs_html = function(content, global = FALSE) {
+resolve_refs_html = function(content, global = FALSE, number_by) {
   content = resolve_ref_links_html(content)
 
-  res = parse_fig_labels(content, global)
+  res = parse_fig_labels(content, global, number_by)
   content = res$content
   ref_table = c(res$ref_table, parse_section_labels(content))
 
@@ -604,7 +607,10 @@ reg_label_types = paste(reg_label_types, 'ex', sep = '|')
 
 # parse figure/table labels, and number them either by section numbers (Figure
 # 1.1, 1.2, ..., 2.1, ...), or globally (Figure 1, 2, ...)
-parse_fig_labels = function(content, global = FALSE) {
+parse_fig_labels = function(content, global = FALSE,
+number_by = list()
+) {
+  number_by = c(number_by,list('thm'='thm','lem'='lem','cor'='cor','prp'='prp','cnj'='cnj','def' = 'def','exm'='exm','exr'='exr'))
   lines = grep(reg_chap, content)
   chaps = gsub(reg_chap, '\\2', content[lines])  # chapter numbers
   if (length(chaps) == 0) {
@@ -638,9 +644,13 @@ parse_fig_labels = function(content, global = FALSE) {
       'There are mutiple types of labels on one line: ', paste(labs, collapse = ', ')
     )
     type = type[1]
+    numtype=getElement(number_by,type)
+#    numtype = is.list(number_by)
+#    stop('numtype, names, elements ',paste(numtype), paste(names(number_by)), paste(number_by$lem))
+#    if (numtype == 'emm') numtype = 'thm'
     num = arry[lab]
     for (k in which(is.na(num))) {
-      num[k] = cntr$inc(type, j)  # increment number only if the label has not been used
+      num[k] = cntr$inc(numtype, j)  # increment number only if the label has not been used
       if (!global) num[k] = paste0(j, '.', num[k])  # Figure X.x
     }
     arry = c(arry, setNames(num, lab))
@@ -668,7 +678,7 @@ parse_fig_labels = function(content, global = FALSE) {
         '(<span class="math display")', sprintf('\\1 id="%s"', lab), content[k]
       )
     }, {
-      labs[[i]] = paste0(label_prefix(type), num, ' ')
+      labs[[i]] = paste0(label_prefix(type), num, ': ')
     })
   }
 

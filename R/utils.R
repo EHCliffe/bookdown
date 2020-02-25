@@ -395,6 +395,7 @@ eng_theorem = function(options) {
   label = paste(theorem_abbr[type], options$label, sep = ':')
   html.before2 = sprintf('(\\#%s) ', label)
   name = options$name; to_md = output_md()
+#  name = paste(name, sprintf('AHA'))
   if (length(name) == 1) {
     if (to_md) {
       html.before2 = paste(html.before2, sprintf('(%s) ', name))
