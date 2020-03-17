@@ -29,7 +29,7 @@ epub_book = function(
   number_sections = TRUE, toc = FALSE, toc_depth = 3, stylesheet = NULL,
   cover_image = NULL, metadata = NULL, chapter_level = 1,
   epub_version = c('epub3', 'epub'), md_extensions = NULL, pandoc_args = NULL,
-  template = 'default', number_by = list()
+  template = 'default', new_theorems=list(), number_by = list(), ...
 ) {
   epub_version = match.arg(epub_version)
   args = c(
@@ -53,7 +53,7 @@ epub_book = function(
     knitr = rmarkdown::knitr_options_html(fig_width, fig_height, NULL, FALSE, dev),
     pandoc = rmarkdown::pandoc_options(epub_version, from, args, ext = '.epub'),
     pre_processor = function(metadata, input_file, runtime, knit_meta, files_dir, output_dir) {
-      process_markdown(input_file, from, args, !number_sections, number_by)
+      process_markdown(input_file, from, args, !number_sections, new_theorems, number_by)
       NULL
     },
     post_processor = function(metadata, input, output, clean, verbose) {
@@ -73,7 +73,7 @@ move_output = function(output) {
   output2
 }
 
-process_markdown = function(input_file, from, pandoc_args, global, number_by, to_md = output_md()) {
+process_markdown = function(input_file, from, pandoc_args, global, new_theorems, number_by, to_md = output_md()) {
   intermediate_html = with_ext(input_file, 'tmp.html')
   on.exit(file.remove(intermediate_html), add = TRUE)
   rmarkdown::pandoc_convert(
@@ -82,9 +82,12 @@ process_markdown = function(input_file, from, pandoc_args, global, number_by, to
   )
   x = read_utf8(intermediate_html)
   x = clean_html_tags(x)
-  figs = parse_fig_labels(x, global, number_by)
+  #Need to do the next thing or the newtheorems will not be picked up in the label list
+  x = resolve_new_theorems(x, global = !number_sections, new_theorems, number_by)
+  figs = parse_fig_labels(x, global, new_theorems, number_by)
   # resolve cross-references and update the Markdown input file
   content = read_utf8(input_file)
+  content = resolve_new_theorems(content, global = !number_sections, new_theorems, number_by)
   i = xfun::prose_index(content)
   content[i] = resolve_refs_md(content[i], c(figs$ref_table, parse_section_labels(x)), to_md)
   if (to_md) content = gsub(
@@ -106,6 +109,7 @@ process_markdown = function(input_file, from, pandoc_args, global, number_by, to
 
 resolve_refs_md = function(content, ref_table, to_md = output_md()) {
   ids = names(ref_table)
+  print(ids)
   # replace (\#fig:label) with Figure x.x:
   for (i in grep('^(<p class="caption|<caption>|Table:|\\\\BeginKnitrBlock)|(!\\[.*?\\]\\(.+?\\))', content)) {
     for (j in ids) {

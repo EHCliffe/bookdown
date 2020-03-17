@@ -52,7 +52,7 @@ html_chapters = function(
   toc = TRUE, number_sections = TRUE, fig_caption = TRUE, lib_dir = 'libs',
   template = bookdown_file('templates/default.html'), pandoc_args = NULL, ...,
   base_format = rmarkdown::html_document, split_bib = TRUE, page_builder = build_chapter,
-  split_by = c('section+number', 'section', 'chapter+number', 'chapter', 'rmd', 'none'), number_by = list()
+  split_by = c('section+number', 'section', 'chapter+number', 'chapter', 'rmd', 'none'), new_theorems=list(), number_by = list()
 ) {
   config = get_base_format(base_format, list(
     toc = toc, number_sections = number_sections, fig_caption = fig_caption,
@@ -64,7 +64,7 @@ html_chapters = function(
   config$post_processor = function(metadata, input, output, clean, verbose) {
     if (is.function(post)) output = post(metadata, input, output, clean, verbose)
     move_files_html(output, lib_dir)
-    output2 = split_chapters(output, page_builder, number_sections, split_by, split_bib, number_by)
+    output2 = split_chapters(output, page_builder, number_sections, split_by, split_bib, new_theorems, number_by)
     if (file.exists(output) && !same_path(output, output2)) file.remove(output)
     move_files_html(output2, lib_dir)
     output2
@@ -126,7 +126,7 @@ tufte_html_book = function(...) {
 #' @references \url{https://bookdown.org/yihui/bookdown/}
 #' @export
 html_document2 = function(
-  ..., number_sections = TRUE, pandoc_args = NULL, base_format = rmarkdown::html_document, number_by=list()
+  ..., number_sections = TRUE, pandoc_args = NULL, base_format = rmarkdown::html_document, new_theorems=list(), number_by=list()
 ) {
   config = get_base_format(base_format, list(
     ..., number_sections = number_sections, pandoc_args = pandoc_args2(pandoc_args)
@@ -138,7 +138,8 @@ html_document2 = function(
     x = clean_html_tags(x)
     x = restore_appendix_html(x, remove = FALSE)
     x = restore_part_html(x, remove = FALSE)
-    x = resolve_refs_html(x, global = !number_sections, number_by)
+    x = resolve_new_theorems(x, global = !number_sections, new_theorems, number_by)
+    x = resolve_refs_html(x, global = !number_sections, new_theorems, number_by)
     write_utf8(x, output)
     output
   }
@@ -242,7 +243,7 @@ build_chapter = function(
   ), collapse = '\n')
 }
 
-split_chapters = function(output, build = build_chapter, number_sections, split_by, split_bib, number_by, ...) {
+split_chapters = function(output, build = build_chapter, number_sections, split_by, split_bib, new_theorems, number_by, ...) {
 
   use_rmd_names = split_by == 'rmd'
   split_level = switch(
@@ -314,7 +315,8 @@ split_chapters = function(output, build = build_chapter, number_sections, split_
 
   # no (or not enough) tokens found in the template
   if (any(c(i1, i2, i3, i4, i5, i6) == 0)) {
-    x = resolve_refs_html(x, !number_sections, number_by)
+    x = resolve_new_theorems(x, global = !number_sections, new_theorems, number_by)
+    x = resolve_refs_html(x, !number_sections, new_theorems, number_by)
     x = add_chapter_prefix(x)
     write_utf8(x, output)
     return(output)
@@ -336,7 +338,8 @@ split_chapters = function(output, build = build_chapter, number_sections, split_
     ' first-level heading(s). Did you forget first-level headings in certain Rmd files?'
   )
 
-  html_body = resolve_refs_html(html_body, !number_sections, number_by)
+  html_body = resolve_new_theorems(html_body, !number_sections, new_theorems, number_by)
+  html_body = resolve_refs_html(html_body, !number_sections, new_theorems, number_by)
 
   # do not split the HTML file
   if (split_level == 0) {
@@ -512,6 +515,16 @@ source_link_setting = function(config, type) {
   list(link = link, text = text)
 }
 
+#' Resolve newtheorems introduced by the user which are using a renderer which does not know the label, only the env name
+resolve_new_theorems = function(content, global = FALSE, new_theorems, number_by){
+  for(i in 1:length(new_theorems)){
+    content = gsub(sprintf('id="%s:', names(new_theorems[i])), sprintf('id="%s:', new_theorems[[i]]), content)
+    content = gsub(sprintf('\\(#%s:', names(new_theorems[i])), sprintf('\\(#%s:', new_theorems[[i]]), content)
+    content = gsub(sprintf('#%s:', names(new_theorems[i])), sprintf('#%s:', new_theorems[[i]]), content)
+  }
+  content
+}
+
 #' Resolve figure/table/section references in HTML
 #'
 #' Post-process the HTML content to resolve references of figures, tables, and
@@ -528,10 +541,10 @@ source_link_setting = function(config, type) {
 #' @keywords internal
 #' @examples library(bookdown)
 #' resolve_refs_html(c('<caption>(#tab:foo) A nice table.</caption>', '<p>See Table @ref(tab:foo).</p>'), TRUE)
-resolve_refs_html = function(content, global = FALSE, number_by) {
+resolve_refs_html = function(content, global = FALSE, new_theorems, number_by) {
   content = resolve_ref_links_html(content)
 
-  res = parse_fig_labels(content, global, number_by)
+  res = parse_fig_labels(content, global, new_theorems, number_by)
   content = res$content
   ref_table = c(res$ref_table, parse_section_labels(content))
 
@@ -608,9 +621,13 @@ reg_label_types = paste(reg_label_types, 'ex', sep = '|')
 # parse figure/table labels, and number them either by section numbers (Figure
 # 1.1, 1.2, ..., 2.1, ...), or globally (Figure 1, 2, ...)
 parse_fig_labels = function(content, global = FALSE,
-number_by = list()
+new_theorems = list(), number_by = list()
 ) {
-  number_by = c(number_by,list('thm'='thm','lem'='lem','cor'='cor','prp'='prp','cnj'='cnj','def' = 'def','exm'='exm','exr'='exr'))
+  new_number_by = setNames(unlist(new_theorems, use.names=FALSE),unlist(new_theorems, use.names=FALSE))
+  number_by = c(number_by,list('thm'='thm','lem'='lem','cor'='cor','prp'='prp','cnj'='cnj','def' = 'def','exm'='exm','exr'='exr'),new_number_by)
+  #print(c('new_theorems: ', new_theorems), quote=FALSE)  
+  #print(c('new_number_by: ', new_number_by), quote=FALSE)
+  #print(c('number_by: ', number_by), quote=FALSE)
   lines = grep(reg_chap, content)
   chaps = gsub(reg_chap, '\\2', content[lines])  # chapter numbers
   if (length(chaps) == 0) {
@@ -624,10 +641,28 @@ number_by = list()
 
   content = restore_math_labels(content)
 
+  # See "prefixes for theorem environments" above - we need to update these with the new labels etc. that the user has provided
+  # There is probably a better way of doing this. The first job is to confirm that this will work at all. 
+  #new_theorem_abbr = c(theorem_abbr, new_theorems)
+  #print(c('new_theorem_abbr: ', new_theorem_abbr), quote=FALSE)
+  new_label_names_math = c(label_names_math, setNames(names(new_theorems), unlist(new_theorems, use.names=FALSE)))
+  #print(c('new_label_names_math: ', new_label_names_math), quote=FALSE)
+  #new_all_math_env = c(names(new_theorem_abbr), names(label_names_math2))
+  #print(c('new_all_math_env: ', new_all_math_env), quote=FALSE)
+  new_label_names = c(list(fig = 'Figure ', tab = 'Table ', eq = 'Equation '), new_label_names_math)
+  #print(c('new_label_names: ', new_label_names), quote=FALSE)
+  new_label_types = names(new_label_names)
+  #print(c('new_label_types: ', new_label_types), quote=FALSE)
+  new_reg_label_types = paste(new_label_types, collapse = '|')
+  new_reg_label_types = paste(new_reg_label_types, 'ex', sep = '|')
+  #print(c('new_reg_label_types: ', new_reg_label_types), quote=FALSE)
+    
   # look for (#fig:label) or (#tab:label) and replace them with Figure/Table x.x
-  m = gregexpr(sprintf('\\(#((%s):[-/[:alnum:]]+)\\)', reg_label_types), content)
+  #m = gregexpr(sprintf('\\(#((%s):[-/[:alnum:]]+)\\)', reg_label_types), content)
+  m = gregexpr(sprintf('\\(#((%s):[-/[:alnum:]]+)\\)', new_reg_label_types), content)
   labs = regmatches(content, m)
-  cntr = new_counters(label_types, chaps)  # chapter counters
+  #cntr = new_counters(label_types, chaps)  # chapter counters
+  cntr = new_counters(new_label_types, chaps)  # chapter counters
   figs = grep('^<div class="figure', content)
   eqns = grep('<span class="math display">', content)
 
